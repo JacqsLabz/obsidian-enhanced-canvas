@@ -51,7 +51,7 @@ The plugin writes two things to every referenced note:
 2. A property named after each canvas's basename, holding links to edge-connected
    nodes.
 
-Load-bearing rules — all four cause silent user-data loss if broken:
+Load-bearing rules — all five cause silent user-data loss if broken:
 
 - **Order:** `canvas` must precede the per-canvas properties. Every write path calls
   `ensureCanvasKeyOrder` **inside** its `processFrontMatter` callback (writes race,
@@ -65,6 +65,12 @@ Load-bearing rules — all four cause silent user-data loss if broken:
   sync runs (to skip no-op `processFrontMatter` calls). The actual add/remove
   decisions happen inside the callback against the **real** frontmatter, because the
   cache lags right after a write.
+- **Match links by basename:** Obsidian rewrites frontmatter links on rename — a
+  path prefix to disambiguate same-basename canvases, an alias — so `[[X.canvas]]`
+  can become `[[folder/X.canvas|X.canvas]]`. Every comparison goes through
+  `canvasLinkBasename`, never string equality, or removal silently leaves the link
+  behind and the sweep appends a duplicate. Basename is the identity here anyway:
+  the per-canvas property key *is* the canvas basename.
 - **Cleanup before flip:** turning `enableFrontmatter` off must run cleanup
   *before* the setting flips, else `removeProperty` no-ops and orphans the
   properties. The settings-tab handler enforces this ordering — preserve it.

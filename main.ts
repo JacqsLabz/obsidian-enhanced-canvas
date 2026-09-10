@@ -62,6 +62,19 @@ function writeLinkSet(fm: Record<string, unknown>, key: string, mutate: (links: 
 	}
 }
 
+/**
+ * '[[folder/Name.canvas|Alias]]' -> 'Name'. Obsidian rewrites frontmatter links
+ * on rename — adding a path prefix to disambiguate same-basename canvases, or an
+ * alias — so plugin-written canvas links are matched by basename, never by string
+ * equality. That is exactly as precise as the per-canvas property keys, which are
+ * canvas basenames themselves.
+ */
+function canvasLinkBasename(link: string): string {
+	const target = link.trim().replace(/^\[\[(.*)\]\]$/, '$1').split('|')[0].trim();
+	const base = target.substring(target.lastIndexOf('/') + 1);
+	return base.endsWith('.canvas') ? base.slice(0, -'.canvas'.length) : base;
+}
+
 /** Escapes regex metacharacters so file names can be embedded in a RegExp. */
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -207,27 +220,24 @@ export default class EnhancedCanvas extends Plugin {
 	/**
 	 * add 'canvas' and canvas basename properties to the node frontmatter.
 	 */
-	addProperty(node: JsonNodeRef, propertyName: string, basename: string) {
+	addProperty(node: JsonNodeRef, canvasFile: TFile) {
 		if (!this.settings.enableFrontmatter) return;
 		if (!node.file) return;
 		const file = this.app.vault.getFileByPath(node.file); // node is JSON node, not canvas node
 		if (!file) return;
 
-		const canvasLink = `[[${propertyName}]]`;
+		const basename = canvasFile.basename;
+		const hasCanvasLink = (links: string[]) => links.some(link => canvasLinkBasename(link) === basename);
 
 		// Skip the write when the cached frontmatter already carries both properties.
 		const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		if (cached && cached[basename] && frontmatterValueToArray(cached.canvas).includes(canvasLink)) return;
+		if (cached && cached[basename] && hasCanvasLink(frontmatterValueToArray(cached.canvas))) return;
 
 		void this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			if (!frontmatter) return;
 
-			if (!frontmatter.canvas) {
-				frontmatter.canvas = [];
-			}
-			if (!frontmatter.canvas.includes(canvasLink)) {
-				frontmatter.canvas.push(canvasLink);
-			}
+			writeLinkSet(frontmatter, 'canvas', (links) =>
+				hasCanvasLink(links) ? links : [...links, `[[${canvasFile.name}]]`]);
 
 			if (!frontmatter[basename]) {
 				frontmatter[basename] = [];
@@ -240,33 +250,24 @@ export default class EnhancedCanvas extends Plugin {
 	/**
 	 * For JSON nodes only, which are stored in the canvas file, not the canvas node in Obsidian.
 	 */
-	removeProperty(node: JsonNodeRef, propertyName: string, basename: string) {
+	removeProperty(node: JsonNodeRef, canvasFile: TFile) {
 		if (!this.settings.enableFrontmatter) return;
 		if (!node.file) return;
 		const file = this.app.vault.getFileByPath(node.file); // node is JSON node, not canvas node
 		if (!file) return;
 
+		const basename = canvasFile.basename;
+		const isCanvasLink = (link: string) => canvasLinkBasename(link) === basename;
+
 		// Skip the write when the cached frontmatter has nothing to remove.
-		const canvasLink = `[[${propertyName}]]`;
 		const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		if (!cached || (!(basename in cached) && !frontmatterValueToArray(cached.canvas).includes(canvasLink))) return;
+		if (!cached || (!(basename in cached) && !frontmatterValueToArray(cached.canvas).some(isCanvasLink))) return;
 
 		return this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			if (!frontmatter) return;
-	
-			// remove the property
-			if (frontmatter[basename]) {
-				delete frontmatter[basename];
-			}
-	
-			// remove the link from the canvas property
-			if (frontmatter.canvas) {
-				frontmatter.canvas = frontmatter.canvas.filter((link: string) => link !== canvasLink);
 
-				if (frontmatter.canvas.length === 0) {
-					delete frontmatter.canvas;
-				}
-			}
+			delete frontmatter[basename];
+			writeLinkSet(frontmatter, 'canvas', (links) => links.filter(link => !isCanvasLink(link)));
 		});
 	}
 
@@ -309,7 +310,7 @@ export default class EnhancedCanvas extends Plugin {
 		const nodes = canvasData.nodes;
 		await Promise.all(nodes.map(node => {
 			if (!node?.file) return;
-			return this.removeProperty(node, canvas.view.file.name, canvas.view.file.basename);
+			return this.removeProperty(node, canvas.view.file);
 		}));
 	}
 
@@ -327,9 +328,8 @@ export default class EnhancedCanvas extends Plugin {
 		if (!this.settings.enableFrontmatter) return;
 
 		interface DesiredProps {
-			/** Entries the `canvas` property must contain, e.g. '[[Name.canvas]]'. */
-			canvasLinks: Set<string>;
-			/** Per-canvas properties (canvas basenames) that must exist. */
+			/** Per-canvas properties (canvas basenames) that must exist, one per
+			 * entry the `canvas` property must carry. */
 			ensureKeys: Set<string>;
 			/** Links each per-canvas property must contain. */
 			linksByKey: Map<string, Set<string>>;
@@ -338,7 +338,7 @@ export default class EnhancedCanvas extends Plugin {
 		const getDesired = (path: string): DesiredProps => {
 			let desired = desiredByPath.get(path);
 			if (!desired) {
-				desired = { canvasLinks: new Set(), ensureKeys: new Set(), linksByKey: new Map() };
+				desired = { ensureKeys: new Set(), linksByKey: new Map() };
 				desiredByPath.set(path, desired);
 			}
 			return desired;
@@ -368,9 +368,7 @@ export default class EnhancedCanvas extends Plugin {
 
 			for (const node of nodes) {
 				if (!node?.file) continue;
-				const desired = getDesired(node.file);
-				desired.canvasLinks.add(`[[${canvasFile.name}]]`);
-				desired.ensureKeys.add(canvasFile.basename);
+				getDesired(node.file).ensureKeys.add(canvasFile.basename);
 			}
 
 			for (const edgeData of edges) {
@@ -406,9 +404,9 @@ export default class EnhancedCanvas extends Plugin {
 				const cachedKeys = Object.keys(cached);
 				const canvasKeyIndex = cachedKeys.indexOf('canvas');
 				const upToDate =
-					Array.from(desired.canvasLinks).every(link => cachedCanvas.includes(link)) &&
-					// The key must exist *and* sit below the `canvas` property in the YAML.
 					Array.from(desired.ensureKeys).every(key =>
+						cachedCanvas.some(link => canvasLinkBasename(link) === key) &&
+						// The key must exist *and* sit below the `canvas` property in the YAML.
 						!!cached[key] && canvasKeyIndex !== -1 && canvasKeyIndex < cachedKeys.indexOf(key)) &&
 					Array.from(desired.linksByKey.entries()).every(([key, links]) => {
 						const existing = frontmatterValueToArray(cached[key]);
@@ -421,13 +419,14 @@ export default class EnhancedCanvas extends Plugin {
 				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 					if (!frontmatter) return;
 
-					const canvasLinks = frontmatterValueToArray(frontmatter.canvas);
-					for (const link of desired.canvasLinks) {
-						if (!canvasLinks.includes(link)) {
-							canvasLinks.push(link);
+					writeLinkSet(frontmatter, 'canvas', (links) => {
+						for (const key of desired.ensureKeys) {
+							if (!links.some(link => canvasLinkBasename(link) === key)) {
+								links.push(`[[${key}.canvas]]`);
+							}
 						}
-					}
-					frontmatter.canvas = canvasLinks;
+						return links;
+					});
 
 					for (const key of desired.ensureKeys) {
 						if (!frontmatter[key]) {
@@ -697,7 +696,7 @@ export default class EnhancedCanvas extends Plugin {
 
 			canvasData.nodes.forEach((node: CanvasNodeData) => {
 				if (node.type !== 'file') return;
-				void this.removeProperty(node, file.name, file.basename);
+				void this.removeProperty(node, file);
 			});
 		}
 
@@ -1072,7 +1071,7 @@ export default class EnhancedCanvas extends Plugin {
                 if (otherNodes.length === 0) {
                     // use the method for JSON node to remove the property named after the canvas file name.
                     const tmpNode: { file?: string } = { file: node.filePath };
-                    void this.removeProperty(tmpNode, canvasFile.name, canvasFile.basename);
+                    void this.removeProperty(tmpNode, canvasFile);
                 }
             }
         };
@@ -1087,7 +1086,7 @@ export default class EnhancedCanvas extends Plugin {
 			if (node.filePath) {
 				// use the method for JSON node to add the property named after the canvas file name.
 				const tmpNode: { file?: string } = { file: node.filePath };
-				void this.addProperty(tmpNode, canvasFile.name, canvasFile.basename);
+				void this.addProperty(tmpNode, canvasFile);
 			}
 		};
 
@@ -1482,13 +1481,6 @@ export default class EnhancedCanvas extends Plugin {
 				.map(file => file.basename)
 		);
 
-		// '[[folder/Name.canvas|Alias]]' -> 'Name'
-		const linkToBasename = (link: string) => {
-			const target = link.replace(/^\[\[(.*)\]\]$/, '$1').split('|')[0];
-			const base = target.substring(target.lastIndexOf('/') + 1);
-			return base.endsWith('.canvas') ? base.slice(0, -'.canvas'.length) : base;
-		};
-
 		const failedFiles: string[] = [];
 
 		await Promise.all(this.app.vault.getMarkdownFiles().map(async (file) => {
@@ -1501,7 +1493,7 @@ export default class EnhancedCanvas extends Plugin {
 					if (!frontmatter) return;
 
 					for (const link of frontmatterValueToArray(frontmatter.canvas)) {
-						delete frontmatter[linkToBasename(link)];
+						delete frontmatter[canvasLinkBasename(link)];
 					}
 					delete frontmatter.canvas;
 

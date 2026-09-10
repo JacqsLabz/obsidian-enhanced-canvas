@@ -33,12 +33,14 @@ Deep detail lives in `docs/agent/`; read the relevant one when you're in that co
   `registerLazyPatcher`; it detaches its retry listeners on success. Hand-rolling and
   leaving them attached re-patches and broke Windows pinned tabs (commit `742eb70`).
   Register uninstallers with `this.register(...)`.
-- **Frontmatter sync writes user notes — 4 invariants, all silent-data-loss if broken:**
+- **Frontmatter sync writes user notes — 5 invariants, all silent-data-loss if broken:**
   cleanup runs *before* flipping `enableFrontmatter` off; `canvas` key precedes
   per-canvas keys (`ensureCanvasKeyOrder` in every write callback); all edge syncs go
   through the debounced queue (never immediate — mid-import strips valid links); the
   metadata cache only gates *whether* a sync runs, decisions read real frontmatter in
-  the callback. Mutation fns early-return when the setting is off.
+  the callback; canvas links are matched via `canvasLinkBasename`, never string
+  equality (Obsidian rewrites them on rename). Mutation fns early-return when the
+  setting is off.
 - **New DOM listener?** Attach per-document (popped-out windows have their own
   `Document`) — follow `registerFocusCanvas`. Workspace events are global and safe.
 
