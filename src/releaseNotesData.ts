@@ -21,6 +21,10 @@ With this update, double-clicking the bottom edge activates "Auto-Resize." Now, 
 `;
 
 export const fixCursorShiftIssueInStackTabsCanvas = `
+> [!bug] Fixed in 1.0.30
+> Deleting a folder no longer throws an error, and notes inside it are cleaned up properly.
+> Moved or renamed canvases no longer leave stale or duplicated links in note properties.
+
 > [!bug] Fixed in 1.0.29
 > Auto-resize and drag-to-create nodes now patch correctly even when a pinned Canvas tab is left uninitialised (Windows).
 
@@ -60,6 +64,7 @@ export const fixCursorShiftIssueInStackTabsCanvas = `
 `;
 
 export const releaseNotesContent: Record<string, string> = {
+    "1.0.30": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.29": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.28": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.27": fixCursorShiftIssueInStackTabsCanvas,
