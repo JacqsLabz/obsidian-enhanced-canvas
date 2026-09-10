@@ -8,7 +8,10 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TAbstractFile,
 	TFile,
+	TFolder,
+	Vault,
 	Notice
 } from 'obsidian';
 import { CanvasEdgeData, CanvasNodeData, NodeSide, CanvasData } from "obsidian/canvas";
@@ -641,6 +644,19 @@ export default class EnhancedCanvas extends Plugin {
 	 * original operation proceeds.
 	 */
 	registerFileManagerPatches() {
+		// Obsidian calls trashFile for folders too, and only once per folder — never
+		// per contained note. Expand to the files that deletion actually removes.
+		const filesIn = (file: TAbstractFile): TFile[] => {
+			if (file instanceof TFile) return [file];
+			const files: TFile[] = [];
+			if (file instanceof TFolder) {
+				Vault.recurseChildren(file, (child) => {
+					if (child instanceof TFile) files.push(child);
+				});
+			}
+			return files;
+		}
+
 		const deleteFile = async (file: TFile) => {
 			if ((file as TFile & { deleted?: boolean }).deleted === true) return;
 
@@ -701,16 +717,31 @@ export default class EnhancedCanvas extends Plugin {
 		}
 
 		const uninstaller = around(this.app.fileManager.constructor.prototype, {
-			trashFile(old: (file: TFile) => Promise<void>) {
-				return function(this: FileManager, file: TFile) {
-					void deleteCanvasFile(file);
-					void deleteFile(file);
+			trashFile(old: (file: TAbstractFile) => Promise<void>) {
+				// Cleanup reads the files being removed, so it has to finish before
+				// the vault removes them. Failures must never block the deletion.
+				// ponytail: sequential; parallelise only if huge folders feel slow.
+				return async function(this: FileManager, file: TAbstractFile) {
+					for (const child of filesIn(file)) {
+						try {
+							await deleteCanvasFile(child);
+							await deleteFile(child);
+						} catch (error) {
+							console.error("Enhanced Canvas: cleanup before trash failed", child.path, error);
+						}
+					}
 					return old.call(this, file);
 				};
 			},
-			renameFile(old: (file: TFile, newPath: string) => Promise<void>) {
-				return function(this: FileManager, file: TFile, newPath: string) {
-					void renameCanvasFile(file, newPath);
+			renameFile(old: (file: TAbstractFile, newPath: string) => Promise<void>) {
+				return async function(this: FileManager, file: TAbstractFile, newPath: string) {
+					if (file instanceof TFile) {
+						try {
+							await renameCanvasFile(file, newPath);
+						} catch (error) {
+							console.error("Enhanced Canvas: cleanup before rename failed", file.path, error);
+						}
+					}
 					return old.call(this, file, newPath);
 				};
 			}
