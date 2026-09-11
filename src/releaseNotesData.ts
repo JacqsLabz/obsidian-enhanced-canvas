@@ -1,66 +1,56 @@
 export const firstInstallContent = `
-Building upon the original "Property Link" and "Auto Focus" features, I am excited to share three key additions in recent updates.
-### ✨ Split Node by Headings & Add Notes by Tag
+Beyond the original "Property Link" and "Auto Focus" features, recent updates add:
 
-**Split Node by Headings** instantly deconstructs a single file node into a hierarchical tree based on its headings. You can try this by right-clicking on a file node and selecting "Split Node by Headings" in Canvas.
-**Add Notes
+### ✨ Split by Headings & Add Notes by Tag
+
+- **Split by headings**: right-click a file or text node in Canvas to break it into a tree of nodes, one per heading.
+- **Add notes by tag...**: right-click an empty spot on the canvas to bulk-import every note matching a tag query.
 
 ### ✨ Send Note to Canvas
 
-With the **"Send to Canvas"** plugin command, you can push your current markdown note directly to a specific Canvas. It automatically appends a "canvas" property to your note, allowing you to navigate back to the board instantly in the future.
-
-Once you have sent a note, that Canvas becomes the "Selected." You can then use the **"Send to Selected Canvas"** plugin command on other notes to instantly add them to the same board—bypassing the file selection step entirely.
+The **"Send to Canvas"** command adds the current note to a Canvas of your choice and writes a "canvas" property to the note, so you can jump back to the board later. That Canvas then becomes the selected one, and **"Send to Selected Canvas"** adds other notes to it without picking the file again.
 
 ### ✨ Auto-Resize Node
 
-This is a feature I’ve wanted for a long time. Previously, double-clicking the bottom edge would fit a node to its content, but changing the width would break this fit, forcing you to double-click again.
-
-With this update, double-clicking the bottom edge activates "Auto-Resize." Now, the node's height dynamically adapts to fit your content—whether you are **adjusting the width** or **updating the text**. No need for repeated double-clicking!
+Double-click a node's bottom edge to turn on auto-resize: its height then keeps fitting the content as you change the width or edit the text.
 
 [View detailed demo at github](https://github.com/RobertttBS/obsidian-enhanced-canvas)
 `;
 
 export const fixCursorShiftIssueInStackTabsCanvas = `
 > [!bug] Fixed in 1.0.30
-> Deleting a folder no longer throws an error, and notes inside it are cleaned up properly.
-> Moved or renamed canvases no longer leave stale or duplicated links in note properties.
+> Deleting a folder no longer throws an error, and the notes inside it are cleaned up properly.
+> Moving or renaming a canvas no longer leaves stale or duplicate links in note properties.
 
 > [!bug] Fixed in 1.0.29
-> Auto-resize and drag-to-create nodes now patch correctly even when a pinned Canvas tab is left uninitialised (Windows).
+> Auto-resize and drag-to-create nodes now work in pinned Canvas tabs that haven't been opened yet (Windows).
 
-> [!success] Refactor in 1.0.28
-> Performance optimizations: faster startup sync and fewer redundant frontmatter writes.
+> [!success] Refactor in 1.0.26–1.0.28
+> Faster startup sync, fewer redundant frontmatter writes, and more robust property cleanup.
 
-> [!success] Refactor in 1.0.27                                                                                                                                                                   
-> Robust Frontmatter & Property Cleanup
+> [!note] Feature in 1.0.25
+> "Add notes by tag..." supports multi-tag queries (AND, OR, exclude) with suggestions.
 
-> [!success] Refactor in 1.0.26
-> No new features, but some refactoring.
-
-> [!NOTE] Feature in 1.0.25
-> Add advanced multi-tag suggestions with robust querying.
-
-> [!tip] Feature in 1.0.24
-> Check the Enhanced Canvas settings to configure your preferred width and height for new nodes in Canvas.
+> [!note] Feature in 1.0.24
+> Set the default width and height for new nodes in the Enhanced Canvas settings.
 
 > [!note] Feature in 1.0.23
-> Added "Add notes by tag..." right-click menu option to bulk import notes by tag.
+> New "Add notes by tag..." right-click menu option to bulk-import notes by tag.
 
 > [!bug] Fixed in 1.0.22
-> Fixed an issue where properties failed to sync for pinned Canvas tabs on Windows 11. (I hope the bug is gone.)
+> Properties now sync for pinned Canvas tabs on Windows 11.
 
 > [!note] Feature in 1.0.21
-> Since the Obsidian Canvas core plugin now supports backlinks, I have added a settings view to Enhanced Canvas that allows you to toggle the "Sync Frontmatter" feature (as well as the plugin's CSS). If you prefer not to have this property added, you can simply disable the "Sync Frontmatter" feature.
+> Canvas core now supports backlinks, so "Sync Frontmatter" (and the plugin's CSS) can be turned off in the Enhanced Canvas settings.
 
-> [!tip] Feature in 1.0.20
-> Added "Focus" functionality for Linked Mentions.
+> [!note] Feature in 1.0.20
+> "Focus" now works for Linked Mentions.
 
-> [!NOTE] Feature in 1.0.19
-> Added "Split by headings" functionality for Card Nodes.
+> [!note] Feature in 1.0.19
+> "Split by headings" now works for Card Nodes.
 
 > [!bug] Fixed in 1.0.18
-> You can now use Canvas with "stacked tabs" enabled without experiencing the cursor position shift issue.
-> This fix applies to the Obsidian Canvas core plugin rather than this specific plugin.
+> Fixes the cursor position shift in Canvas when "stacked tabs" is enabled (a bug in the Canvas core plugin).
 `;
 
 export const releaseNotesContent: Record<string, string> = {
@@ -69,7 +59,7 @@ export const releaseNotesContent: Record<string, string> = {
     "1.0.28": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.27": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.26": fixCursorShiftIssueInStackTabsCanvas,
-    "1.0.25": fixCursorShiftIssueInStackTabsCanvas, 
+    "1.0.25": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.24": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.23": fixCursorShiftIssueInStackTabsCanvas,
     "1.0.22": fixCursorShiftIssueInStackTabsCanvas,

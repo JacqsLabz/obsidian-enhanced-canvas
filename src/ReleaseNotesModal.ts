@@ -44,7 +44,8 @@ export class ReleaseNotesModal extends Modal {
             const versions = Object.keys(releaseNotesContent).sort((a, b) => isVersionNewer(a, b) ? -1 : 1);
             
             for (const v of versions) {
-                if (isVersionNewer(v, this.previousVersion) && !isVersionNewer(v, this.version)) {
+                // Many versions share one cumulative changelog; show it only once.
+                if (isVersionNewer(v, this.previousVersion) && !isVersionNewer(v, this.version) && !notes.includes(releaseNotesContent[v])) {
                     notes.push(releaseNotesContent[v]);
                 }
             }
