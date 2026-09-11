@@ -100,7 +100,8 @@ export class CanvasExploder {
         // Split by newlines to process line by line
         const lines = rawText.split(/\r?\n/);
         const sections: { level: number, content: string }[] = [];
-        
+        const preamble: string[] = [];
+
         let currentSection: { level: number, lines: string[] } | null = null;
 
         // Regex to detect headings (e.g., "## My Title")
@@ -123,11 +124,10 @@ export class CanvasExploder {
                     level: match[1].length, // Number of hashes
                     lines: [line] // Keep the heading in the content
                 };
+            } else if (currentSection) {
+                currentSection.lines.push(line);
             } else {
-                // Append line to current section (or handle preamble text if needed)
-                if (currentSection) {
-                    currentSection.lines.push(line);
-                }
+                preamble.push(line);
             }
         }
 
@@ -137,6 +137,13 @@ export class CanvasExploder {
                 level: currentSection.level,
                 content: currentSection.lines.join('\n')
             });
+        }
+
+        // Text before the first heading becomes its own card, a sibling of the
+        // first heading placed above it (so it is always a leaf, never compacted).
+        const preambleText = preamble.join('\n').trim();
+        if (preambleText && sections.length > 0) {
+            sections.unshift({ level: sections[0].level, content: preambleText });
         }
 
         return sections;
@@ -156,14 +163,27 @@ export class CanvasExploder {
 			return;
 		}
 
+		const sections: { level: number, heading?: string }[] =
+			cache.headings.map((h) => ({ level: h.level, heading: h.heading }));
+
+		// Content before the first heading (frontmatter excluded) gets its own node,
+		// mirroring parseMarkdownHeadings.
+		const firstHeadingLine = cache.headings[0].position.start.line;
+		if (cache.sections?.some((s) => s.type !== 'yaml' && s.position.start.line < firstHeadingLine)) {
+			sections.unshift({ level: sections[0].level });
+		}
+
 		const createdCount = this.buildSectionTree(
 			canvas,
 			originalNode,
-			cache.headings,
-			(heading) => ({
+			sections,
+			(section) => ({
 				type: 'file',
 				file: targetFile.path,
-				subpath: `#${this.sanitizeHeading(heading.heading)}`,
+				// ponytail: no subpath can target "before the first heading", so the
+				// preamble node embeds the whole note (preamble renders at the top).
+				// Explicit undefined overrides any subpath inherited from originalData.
+				subpath: section.heading === undefined ? undefined : `#${this.sanitizeHeading(section.heading)}`,
 			}),
 			COMPACT_HEIGHT,
 		);
