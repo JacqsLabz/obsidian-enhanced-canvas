@@ -1,3 +1,11 @@
+# Enhanced Canvas Fork
+
+This version of Enhanced Canvas has a setting for prefix that will be added to all properties to help organize the canvas related properties in a large vault. It also gives all canvas related properties the little canvas icon. 
+
+----
+
+Orginal desdcription:
+
 # Enhanced Canvas
 
 > This Obsidian plugin enhances Obsidian Canvas with features I find essential.
