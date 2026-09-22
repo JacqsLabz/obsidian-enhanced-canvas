@@ -80,24 +80,38 @@ function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Returns the configured property key for a plugin-managed property. */
+function getPropertyPrefix(settings: EnhancedCanvasSettings): string {
+	const prefix = (settings as EnhancedCanvasSettings & { propertyPrefix?: unknown }).propertyPrefix;
+	return typeof prefix === 'string' ? prefix : '';
+}
+
+function getPropertyKey(settings: EnhancedCanvasSettings, name: string): string {
+	return `${getPropertyPrefix(settings)}${name}`;
+}
+
 /**
  * processFrontMatter serializes keys in object insertion order, so a per-canvas
  * property created before the `canvas` property (e.g. by an edge sync racing the
  * node-add sync) ends up above it in the YAML. Rebuilds the object so `canvas`
  * sits just before the first per-canvas key, leaving other properties in place.
  */
-function ensureCanvasKeyOrder(frontmatter: Record<string, unknown>, canvasKeys: Iterable<string>) {
+function ensureCanvasKeyOrder(
+	frontmatter: Record<string, unknown>,
+	canvasKeys: Iterable<string>,
+	canvasPropertyKey = 'canvas',
+) {
 	const keys = Object.keys(frontmatter);
-	const canvasIndex = keys.indexOf('canvas');
+	const canvasIndex = keys.indexOf(canvasPropertyKey);
 	if (canvasIndex === -1) return;
 
 	const targetKeys = new Set(canvasKeys);
-	targetKeys.delete('canvas');
+	targetKeys.delete(canvasPropertyKey);
 	const firstTargetIndex = keys.findIndex(key => targetKeys.has(key));
 	if (firstTargetIndex === -1 || canvasIndex < firstTargetIndex) return;
 
 	const values = { ...frontmatter };
-	const reordered = keys.filter(key => key !== 'canvas');
+	const reordered = keys.filter(key => key !== canvasPropertyKey);
 	reordered.splice(reordered.indexOf(keys[firstTargetIndex]), 0, 'canvas');
 
 	for (const key of keys) delete frontmatter[key];
@@ -114,6 +128,8 @@ export default class EnhancedCanvas extends Plugin {
 	public canvasStackInterval: number | null = null;
 	public autoHeightUninstaller: (() => void) | null = null;
 	public dragTempNodeUninstaller: (() => void) | null = null;
+	public propertyPrefixSyncTimer: number | null = null;
+	private propertyIconObserver: MutationObserver | null = null;
 
 	/**
 	 * Scans the selected nodes to identify underlying file references and automatically
@@ -226,24 +242,26 @@ export default class EnhancedCanvas extends Plugin {
 		const file = this.app.vault.getFileByPath(node.file); // node is JSON node, not canvas node
 		if (!file) return;
 
+		const canvasKey = getPropertyKey(this.settings, 'canvas');
 		const basename = canvasFile.basename;
+		const basenameKey = getPropertyKey(this.settings, basename);
 		const hasCanvasLink = (links: string[]) => links.some(link => canvasLinkBasename(link) === basename);
 
 		// Skip the write when the cached frontmatter already carries both properties.
 		const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		if (cached && cached[basename] && hasCanvasLink(frontmatterValueToArray(cached.canvas))) return;
+		if (cached && cached[basenameKey] && hasCanvasLink(frontmatterValueToArray(cached[canvasKey]))) return;
 
 		void this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			if (!frontmatter) return;
 
-			writeLinkSet(frontmatter, 'canvas', (links) =>
+			writeLinkSet(frontmatter, canvasKey, (links) =>
 				hasCanvasLink(links) ? links : [...links, `[[${canvasFile.name}]]`]);
 
-			if (!frontmatter[basename]) {
-				frontmatter[basename] = [];
+			if (!frontmatter[basenameKey]) {
+				frontmatter[basenameKey] = [];
 			}
 
-			ensureCanvasKeyOrder(frontmatter, [basename]);
+			ensureCanvasKeyOrder(frontmatter, [basenameKey], canvasKey);
 		});
 	}
 
@@ -256,18 +274,20 @@ export default class EnhancedCanvas extends Plugin {
 		const file = this.app.vault.getFileByPath(node.file); // node is JSON node, not canvas node
 		if (!file) return;
 
+		const canvasKey = getPropertyKey(this.settings, 'canvas');
 		const basename = canvasFile.basename;
+		const basenameKey = getPropertyKey(this.settings, basename);
 		const isCanvasLink = (link: string) => canvasLinkBasename(link) === basename;
 
 		// Skip the write when the cached frontmatter has nothing to remove.
 		const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		if (!cached || (!(basename in cached) && !frontmatterValueToArray(cached.canvas).some(isCanvasLink))) return;
+		if (!cached || (!(basenameKey in cached) && !frontmatterValueToArray(cached[canvasKey]).some(isCanvasLink))) return;
 
 		return this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			if (!frontmatter) return;
 
-			delete frontmatter[basename];
-			writeLinkSet(frontmatter, 'canvas', (links) => links.filter(link => !isCanvasLink(link)));
+			delete frontmatter[basenameKey];
+			writeLinkSet(frontmatter, canvasKey, (links) => links.filter(link => !isCanvasLink(link)));
 		});
 	}
 
@@ -285,6 +305,8 @@ export default class EnhancedCanvas extends Plugin {
 		newName = getBaseName(newName);
 		const oldBaseName = oldName.endsWith('.canvas') ? oldName.slice(0, -7) : oldName;
 		const newBaseName = newName.endsWith('.canvas') ? newName.slice(0, -7) : newName;
+		const oldKey = getPropertyKey(this.settings, oldBaseName);
+		const newKey = getPropertyKey(this.settings, newBaseName);
 	
 		void this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			if (!frontmatter) return;
@@ -292,7 +314,7 @@ export default class EnhancedCanvas extends Plugin {
 			// rebuild the frontmatter with the new property name
 			const newFrontmatter = Object.fromEntries(
 				Object.entries(frontmatter).map(([key, value]) => [
-					key === oldBaseName ? newBaseName : key,
+					key === oldKey ? newKey : key,
 					value
 				])
 			);
@@ -328,6 +350,8 @@ export default class EnhancedCanvas extends Plugin {
 		if (!this.settings.enableFrontmatter) return;
 
 		interface DesiredProps {
+			/** Canvas links that must be present in the shared canvas property. */
+			canvasLinks: Set<string>;
 			/** Per-canvas properties (canvas basenames) that must exist, one per
 			 * entry the `canvas` property must carry. */
 			ensureKeys: Set<string>;
@@ -338,7 +362,7 @@ export default class EnhancedCanvas extends Plugin {
 		const getDesired = (path: string): DesiredProps => {
 			let desired = desiredByPath.get(path);
 			if (!desired) {
-				desired = { ensureKeys: new Set(), linksByKey: new Map() };
+				desired = { canvasLinks: new Set(), ensureKeys: new Set(), linksByKey: new Map() };
 				desiredByPath.set(path, desired);
 			}
 			return desired;
@@ -368,7 +392,9 @@ export default class EnhancedCanvas extends Plugin {
 
 			for (const node of nodes) {
 				if (!node?.file) continue;
-				getDesired(node.file).ensureKeys.add(canvasFile.basename);
+				const desired = getDesired(node.file);
+				desired.canvasLinks.add(`[[${canvasFile.name}]]`);
+				desired.ensureKeys.add(getPropertyKey(this.settings, canvasFile.basename));
 			}
 
 			for (const edgeData of edges) {
@@ -384,10 +410,11 @@ export default class EnhancedCanvas extends Plugin {
 				const link = this.app.fileManager.generateMarkdownLink(toFile, fromNode.file).replace(/^!(\[\[.*\]\])$/, '$1');
 
 				const desired = getDesired(fromNode.file);
-				let links = desired.linksByKey.get(canvasFile.basename);
+				const canvasKey = getPropertyKey(this.settings, canvasFile.basename);
+				let links = desired.linksByKey.get(canvasKey);
 				if (!links) {
 					links = new Set();
-					desired.linksByKey.set(canvasFile.basename, links);
+					desired.linksByKey.set(canvasKey, links);
 				}
 				links.add(link);
 			}
@@ -400,12 +427,13 @@ export default class EnhancedCanvas extends Plugin {
 
 			const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
 			if (cached) {
-				const cachedCanvas = frontmatterValueToArray(cached.canvas);
+				const canvasKey = getPropertyKey(this.settings, 'canvas');
+				const cachedCanvas = frontmatterValueToArray(cached[canvasKey]);
 				const cachedKeys = Object.keys(cached);
-				const canvasKeyIndex = cachedKeys.indexOf('canvas');
+				const canvasKeyIndex = cachedKeys.indexOf(canvasKey);
 				const upToDate =
+					Array.from(desired.canvasLinks).every(link => cachedCanvas.includes(link)) &&
 					Array.from(desired.ensureKeys).every(key =>
-						cachedCanvas.some(link => canvasLinkBasename(link) === key) &&
 						// The key must exist *and* sit below the `canvas` property in the YAML.
 						!!cached[key] && canvasKeyIndex !== -1 && canvasKeyIndex < cachedKeys.indexOf(key)) &&
 					Array.from(desired.linksByKey.entries()).every(([key, links]) => {
@@ -418,11 +446,12 @@ export default class EnhancedCanvas extends Plugin {
 			try {
 				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 					if (!frontmatter) return;
+					const canvasKey = getPropertyKey(this.settings, 'canvas');
 
-					writeLinkSet(frontmatter, 'canvas', (links) => {
-						for (const key of desired.ensureKeys) {
-							if (!links.some(link => canvasLinkBasename(link) === key)) {
-								links.push(`[[${key}.canvas]]`);
+					writeLinkSet(frontmatter, canvasKey, (links) => {
+						for (const link of desired.canvasLinks) {
+							if (!links.includes(link)) {
+								links.push(link);
 							}
 						}
 						return links;
@@ -445,7 +474,7 @@ export default class EnhancedCanvas extends Plugin {
 						});
 					}
 
-					ensureCanvasKeyOrder(frontmatter, desired.ensureKeys);
+					ensureCanvasKeyOrder(frontmatter, desired.ensureKeys, canvasKey);
 				});
 			} catch (error) {
 				console.error("Enhanced Canvas: Failed to update properties for note", path, error);
@@ -459,15 +488,17 @@ export default class EnhancedCanvas extends Plugin {
 	 */
     updateFrontmatter = async (file: TFile, link: string, action: 'add' | 'remove', propertyName: string) => {
 		if (!this.settings.enableFrontmatter) return;
+		const propertyKey = getPropertyKey(this.settings, propertyName);
+		const canvasKey = getPropertyKey(this.settings, 'canvas');
         await this.app.fileManager.processFrontMatter(file, (fm) => {
-            writeLinkSet(fm, propertyName, (links) => {
+						writeLinkSet(fm, propertyKey, (links) => {
                 const set = new Set(links);
                 if (action === 'add') set.add(link);
                 else set.delete(link);
                 return Array.from(set);
             });
 
-            ensureCanvasKeyOrder(fm, [propertyName]);
+			ensureCanvasKeyOrder(fm, [propertyKey], canvasKey);
         });
     };
 
@@ -533,6 +564,7 @@ export default class EnhancedCanvas extends Plugin {
 
 		this.addSettingTab(new EnhancedCanvasSettingTab(this.app, this));
 		this.toggleCSSClass(this.settings.enableCustomCSS);
+		this.registerPropertyIconMarkers();
 
 		this.registerPluginCommands();
 		this.registerCanvasAutoLink();
@@ -545,6 +577,7 @@ export default class EnhancedCanvas extends Plugin {
 		this.registerCanvasDragTempNodePatcher();
 
 		try {
+			await this.cleanupObsoletePrefixedProperties();
 			await this.syncAllCanvasProperties();
 		} catch (error) {
 			console.error("Enhanced Canvas: Error in metadata update loop", error);
@@ -605,6 +638,32 @@ export default class EnhancedCanvas extends Plugin {
 		);
 	}
 
+	registerPropertyIconMarkers() {
+		this.propertyIconObserver = new MutationObserver(() => this.updatePropertyIconMarkers());
+		this.propertyIconObserver.observe(activeDocument.body, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ['data-property-key']
+		});
+		this.updatePropertyIconMarkers();
+	}
+
+	updatePropertyIconMarkers() {
+		const keys = new Set([
+			getPropertyKey(this.settings, 'canvas').toLowerCase(),
+			...this.app.vault.getFiles()
+				.filter(file => file.extension === 'canvas')
+				.map(file => getPropertyKey(this.settings, file.basename).toLowerCase())
+		]);
+		activeDocument.querySelectorAll<HTMLElement>('.metadata-property[data-property-key]').forEach(property => {
+			property.classList.toggle(
+				'enhanced-canvas-property',
+				keys.has((property.getAttribute('data-property-key') || '').toLowerCase()),
+			);
+		});
+	}
+
     checkReleaseNotes() {
         try {
             const currentVersion = this.manifest.version;
@@ -629,7 +688,7 @@ export default class EnhancedCanvas extends Plugin {
     }
 
     async loadSettings() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, { propertyPrefix: '' }, await this.loadData());
     }
 
     async saveSettings() {
@@ -962,7 +1021,7 @@ export default class EnhancedCanvas extends Plugin {
 			// call — the actual add/remove decisions are made against the real
 			// frontmatter inside processFrontMatter below.
 			const cachedLinks = frontmatterValueToArray(
-				this.app.metadataCache.getFileCache(fromFile)?.frontmatter?.[canvasName]
+				this.app.metadataCache.getFileCache(fromFile)?.frontmatter?.[getPropertyKey(this.settings, canvasName)]
 			);
 			const cacheOutOfDate =
 				linksToRemove.some(link => cachedLinks.includes(link)) ||
@@ -977,7 +1036,7 @@ export default class EnhancedCanvas extends Plugin {
 					return next;
 				});
 
-				ensureCanvasKeyOrder(fm, [canvasName]);
+				ensureCanvasKeyOrder(fm, [getPropertyKey(this.settings, canvasName)], getPropertyKey(this.settings, 'canvas'));
 			});
 		};
 
@@ -1458,6 +1517,14 @@ export default class EnhancedCanvas extends Plugin {
 	 * plugin are removed from the vault.
 	 */
 	onunload() {
+		if (this.propertyIconObserver) {
+			this.propertyIconObserver.disconnect();
+			this.propertyIconObserver = null;
+		}
+		if (this.propertyPrefixSyncTimer !== null) {
+			window.clearTimeout(this.propertyPrefixSyncTimer);
+			this.propertyPrefixSyncTimer = null;
+		}
 		// canvasStackInterval is registered via registerInterval, so Obsidian
 		// clears it on unload.
 		activeDocument.body.classList.remove('enhanced-canvas-enabled');
@@ -1475,10 +1542,11 @@ export default class EnhancedCanvas extends Plugin {
 	 * whose frontmatter could not be updated.
 	 */
 	async cleanupCanvasProperties(): Promise<string[]> {
+		const canvasKey = getPropertyKey(this.settings, 'canvas');
 		const canvasBasenames = new Set(
 			this.app.vault.getFiles()
 				.filter(file => file.extension === 'canvas')
-				.map(file => file.basename)
+				.map(file => getPropertyKey(this.settings, file.basename))
 		);
 
 		const failedFiles: string[] = [];
@@ -1486,16 +1554,16 @@ export default class EnhancedCanvas extends Plugin {
 		await Promise.all(this.app.vault.getMarkdownFiles().map(async (file) => {
 			const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
 			if (!cached) return;
-			if (!('canvas' in cached) && !Object.keys(cached).some(key => canvasBasenames.has(key))) return;
+			if (!(canvasKey in cached) && !Object.keys(cached).some(key => canvasBasenames.has(key))) return;
 
 			try {
 				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 					if (!frontmatter) return;
 
-					for (const link of frontmatterValueToArray(frontmatter.canvas)) {
-						delete frontmatter[canvasLinkBasename(link)];
+					for (const link of frontmatterValueToArray(frontmatter[canvasKey])) {
+						delete frontmatter[getPropertyKey(this.settings, canvasLinkBasename(link))];
 					}
-					delete frontmatter.canvas;
+					delete frontmatter[canvasKey];
 
 					for (const key of Object.keys(frontmatter)) {
 						if (canvasBasenames.has(key)) delete frontmatter[key];
@@ -1508,6 +1576,28 @@ export default class EnhancedCanvas extends Plugin {
 		}));
 
 		return failedFiles;
+	}
+
+	async cleanupObsoletePrefixedProperties() {
+		const canvasBasenames = this.app.vault.getFiles()
+			.filter(file => file.extension === 'canvas')
+			.map(file => file.basename);
+		const currentKeys = new Set(canvasBasenames.map(basename => getPropertyKey(this.settings, basename)));
+		const prefix = getPropertyPrefix(this.settings);
+		const prefixBase = prefix.replace(/[-_\s]+$/, '');
+
+		await Promise.all(this.app.vault.getMarkdownFiles().map(async (file) => {
+			const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
+			if (!cached) return;
+			const obsoleteKeys = Object.keys(cached).filter(key => canvasBasenames.some(basename =>
+				key.endsWith(basename) && !currentKeys.has(key) &&
+				(key === basename || (prefixBase !== '' && key.startsWith(prefixBase)))
+			));
+			if (obsoleteKeys.length === 0) return;
+			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				for (const key of obsoleteKeys) delete frontmatter[key];
+			});
+		}));
 	}
 }
 
@@ -1551,7 +1641,31 @@ class EnhancedCanvasSettingTab extends PluginSettingTab {
 
 						this.plugin.settings.enableFrontmatter = value;
 						await this.plugin.saveSettings();
+						await this.plugin.cleanupObsoletePrefixedProperties();
+						await this.plugin.syncAllCanvasProperties();
 					})
+			);
+
+		const settingsWithPrefix = this.plugin.settings as EnhancedCanvasSettings & { propertyPrefix: string };
+		new Setting(containerEl)
+			.setName('Frontmatter property prefix')
+			.setDesc("Prefix added to the canvas and per-canvas properties, for example 'ec-'. Leave blank to use the default names.")
+			.addText(text => text
+				.setValue(settingsWithPrefix.propertyPrefix)
+				.setPlaceholder('Optional prefix')
+				.onChange(async (value) => {
+					settingsWithPrefix.propertyPrefix = value;
+					this.plugin.updatePropertyIconMarkers();
+					await this.plugin.saveSettings();
+					if (this.plugin.propertyPrefixSyncTimer !== null) {
+						window.clearTimeout(this.plugin.propertyPrefixSyncTimer);
+					}
+					this.plugin.propertyPrefixSyncTimer = window.setTimeout(() => {
+						this.plugin.propertyPrefixSyncTimer = null;
+						void this.plugin.cleanupObsoletePrefixedProperties()
+							.then(() => this.plugin.syncAllCanvasProperties());
+					}, 500);
+				})
 			);
 
 		new Setting(containerEl)
